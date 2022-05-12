@@ -1,0 +1,368 @@
+#Importación de paquetes necesarios
+import pandas as pd
+import scipy.optimize
+from datetime import date
+import matplotlib.pyplot as plt
+plt.style.use('seaborn-whitegrid')
+import numpy as np
+
+"""Importación y formateo de precios"""
+precios_path = "/RUTA/"
+precios= pd.read_csv(precios_path + "preciosfiltrados.csv",parse_dates=["Fecha"])
+precios=precios.iloc[:,1:]
+precios=precios[["Fecha", "Especie","Último"]] #formato de la información a utilizar como input
+
+"""Importación de flujos de pagos"""
+flujos_path = "/content/drive/My Drive/RUTA/"
+flujos= pd.read_excel(flujos_path + "Activos flujos.xlsx",sheet_name="Flujo unico")  #segundo input debe ser una serie de flujos correspondientes a cada título
+
+"""Definición de funciones XIRR y NPV"""
+def xnpv(rate, values, dates):
+ if rate <= -1.0:
+ return float('inf')
+ d0 = dates[0] # or min(dates)
+ return sum([ vi / (1.0 + rate)**((di - d0).days / 365.0) for vi, di in zip(values, dates)])
+#el commando zip contruye tuplas iterables con ambas listas presentadas
+
+def xirr(values, dates):
+ try:
+ return scipy.optimize.newton(lambda r: xnpv(r, values, dates), 0.0)
+ except RuntimeError: # Failed to converge?
+ return scipy.optimize.brentq(lambda r: xnpv(r, values, dates), -1.0, 1e10)
+precios.set_index("Fecha",inplace=True)
+flujos=flujos[["Fecha","Ticker","PAGO"]]
+flujos.set_index(keys=["Fecha","Ticker"],inplace=True)
+
+#Asociamos a cada registro de cotización un subconjunto de flujos correspondiente a los pagos posteriores a esa fecha, para ese
+bono, y sus fechas correspondientes
+precios["TIR"]=0.0
+precios.reset_index(inplace=True)
+flujos.reset_index(inplace=True)
+precios["TIR"].astype(object)
+precios=precios[["Fecha","Especie","Último"]]
+
+#Se remueven precios y flujos nulos (observados en los días de emisión de los bonos)
+28
+precios=precios[precios["Último"]!=0]
+flujos=flujos[flujos["PAGO"]!=0]
+
+#Se calculan las TIR para cada fecha y cada activo
+for i in range(len(precios)):
+ fechaflujos=flujos[(flujos["Fecha"]>precios.iloc[i,0])&(flujos["Ticker"]==precios.iloc[i,1])][["Fecha","PAGO"]]
+ a=pd.Series(fechaflujos["Fecha"])
+ b=pd.Series(fechaflujos["PAGO"])
+ a=([precios.iloc[i,0]]+a.tolist())
+ b=([-precios.iloc[i,2]]+b.tolist())
+ precios.iloc[i,3]=xirr(b,a)
+
+#Para graficar histogramas e identificar outliers:
+x = preciosB["TIR"]
+plt.hist(x, bins = 10)
+plt.show()
+preciosB[preciosB["TIR"]>0.2]
+preciosB=preciosB[preciosB["TIR"]<0.5]
+
+#Se descartan registros con TIR mayor a 50% (percentil 99%).
+x = preciosB["TIR"]
+plt.hist(x, bins = 50)
+plt.show()
+preciosB=preciosB[["Fecha","Especie","Último","TIR"]]
+#Cálculo de Modified Duration
+from datetime import datetime
+preciosB["MD"]=0.0
+c=[]
+for i in range(len(preciosB)):
+ fechaflujos=flujos[(flujos["Fecha"]>preciosB.iloc[i,0])&(flujos["Ticker"]==preciosB.iloc[i,1])][["Fecha","PAGO"]]
+ a=pd.Series(fechaflujos["Fecha"])
+ b=pd.Series(fechaflujos["PAGO"])
+
+ for j in range(len(a)):
+ a.iloc[j]=(a.iloc[j]-preciosB.iloc[i,0]).days/365
+ b.iloc[j]=(b.iloc[j]/(1+preciosB.iloc[i,3])**(a.iloc[j]))
+ c.append(a.iloc[j]*b.iloc[j])
+ preciosB.iloc[i,4]=sum(c)/preciosB.iloc[i,2]
+ c.clear()
+
+#Cálculo de TTM
+from datetime import datetime
+preciosB["TTM"]=0
+preciosB["Vencimiento"]=0
+preciosB["Vencimiento"]=pd.Series(preciosB["Vencimiento"])
+preciosB["Fecha"]=pd.Series(preciosB["Fecha"])
+for i in range(len(preciosB)):
+ preciosB.iloc[i,6]=flujos[flujos["Ticker"]==preciosB.iloc[i,1]]["Fecha"].max()
+for i in range(len(preciosB)):
+ preciosB.iloc[i,6]=datetime.strptime(str(preciosB.iloc[i,6])[:10],"%Y-%m-%d")
+29
+for i in range(len(preciosB)):
+ preciosB.iloc[i,0]=datetime.strptime(str(preciosB.iloc[i,0])[:10],"%Y-%m-%d")
+for i in range(len(preciosB)):
+ preciosB.iloc[i,0]=datetime.strptime(str(preciosB.iloc[i,0]),"%Y-%m-%d %H:%M:%S")
+ preciosB.iloc[i,6]=datetime.strptime(str(preciosB.iloc[i,6]),"%Y-%m-%d %H:%M:%S")
+pd.Series(preciosB["Vencimiento"])
+pd.Series(preciosB["Fecha"])
+preciosB["Vencimiento"]=pd.to_datetime(preciosB["Vencimiento"])
+preciosB["TTM"]=preciosB["Vencimiento"]-preciosB["Fecha"]
+for i in range(len(preciosB)):
+ preciosB.iloc[i,5]=(preciosB.iloc[i,6]-preciosB.iloc[i,0]).days
+
+#Exportación
+preciosB["TTM"] = pd.to_numeric(preciosB["TTM"], downcast="float")
+preciosB.to_csv(r" /RUTA/BaseTIR_MD.csv")
+2) Interpolación de curvas por Cubic Splines:
+#Instalación a importación de paquetes necesarios.
+!pip install nelson_siegel_svensson
+!pip install gekko
+!pip install --upgrade gekko
+from gekko import GEKKO
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import datetime
+now = datetime.now()
+import pylab as plb
+import pandas as pd
+
+#Importación de base TIR-MD
+TIRes_path = "/RUTA/"
+tiresmdcompleto= pd.read_csv(TIRes_path + "BaseTIR_MD.csv")
+tiresmdcompleto= tiresmdcompleto.loc[:,["Fecha","Especie","TIR","TTM","MD"]]
+tiresmdcompleto.head()
+#Se acortan las fechas, quitando horas, minutos y segundos
+for i in range(len(tiresmdcompleto)):
+ tiresmdcompleto.iloc[i,0]=tiresmdcompleto.iloc[i,0][:10]
+print(tiresmdcompleto["Fecha"].max()+" "+tiresmdcompleto["Fecha"].min())
+#Se definen los extremos de la interpolación
+tiresmdcompleto[tiresmdcompleto["Especie"]=="PARAD"].MD.min()
+tiresmdcompleto[tiresmdcompleto["Especie"]=="AN18D"].MD.max()
+#Se limita la ventana temporal para evitar extrapolación
+tiresmdcompleto[tiresmdcompleto["Fecha"]=="2015-12-02"]
+#Se clasifican los activos en Ley Argentina y Ley Extranjera
+30
+ext=["AA26D", "AA46D", "A2E2D", "A2E3D", "A2E7D", "A2E8D", "AE48D", "AC17D"]
+arg=["AA17D", "AN18D", "AO20D", "AY24D", "PARAD", "DICAD", "AA25D", "AA37D"]
+cartera=["AA17D", "AN18D", "AO20D", "AY24D", "PARAD", "DICAD",
+"AA37D","A2E2D","A2E2D","A2E3D","A2E8D","AE48D","AC17D","A2E7D","AA25D"]
+#Se construyen los dos sets separados:
+tiresmdext=tiresmdcompleto[tiresmdcompleto["Especie"].isin(ext)]
+tiresmdarg=tiresmdcompleto[tiresmdcompleto["Especie"].isin(arg)]
+tiresmdarg=tiresmdarg[tiresmdarg["TIR"]<=0.17] # Se eliminan valores extremos
+filtroarg=tiresmdarg.groupby(["Fecha"]).count()
+fechasarg=list(filtroarg[filtroarg["Especie"]>=6].index)
+filtroext=tiresmdext.groupby(["Fecha"]).count()
+fechasext=list(filtroext[filtroext["Especie"]>=6].index)
+#Comparación Ley Arg, Ley Ext.
+fechacompara="2018-10-30"
+#Cubic Spline para Ley Arg
+xm = tiresmdarg[tiresmdarg["Fecha"]==fechacompara]["MD"].to_numpy()
+ym = tiresmdarg[tiresmdarg["Fecha"]==fechacompara]["TIR"].to_numpy()
+m = GEKKO()
+m.x = m.Param(value=np.linspace(1,11,11)) #Espacio lineal sobre el que se calculará la función resultante
+m.y = m.Var() #Predicciones
+m.options.IMODE=2 #Modo "Solución"
+m.cspline(m.x,m.y,xm,ym) #Cubic Spline
+m.solve(disp=False) #Solve
+#help(m.cspline)
+#Cubic Spline para Ley Ext
+xmext = tiresmdext[tiresmdext["Fecha"]==fechacompara]["MD"].to_numpy()
+ymext = tiresmdext[tiresmdext["Fecha"]==fechacompara]["TIR"].to_numpy()
+mext = GEKKO() #CREA MODELO GEKKO
+mext.x = mext.Param(value=np.linspace(1,11,11))
+mext.y = mext.Var()
+mext.options.IMODE=2
+mext.cspline(mext.x,mext.y,xmext,ymext)
+mext.solve(disp=False)
+#Gráfico comparativo
+plt.plot(xmext,ymext,'ko',label='data ext')
+plt.plot(mext.x.value,mext.y.value,'y--',label='cubic spline ext')
+plt.plot(xm,ym,'bo',label='data arg')
+plt.plot(m.x.value,m.y.value,'r--',label='cubic spline arg')
+plt.xlabel("MD",size=12)
+plt.ylabel("TIR",size=12)
+plt.legend()
+plt.show()
+
+# Interpolación para cada día de la ventana temporal escogida, en base a activos Ley Argentina.
+current_time = now.strftime("%H:%M:%S")
+print("Current Time =", current_time)
+yt=[]
+yt.clear()
+for i in fechasarg:
+31
+ dia=i
+ m = GEKKO()
+ m.x = m.Param(value=np.linspace(0,12,49))
+ m.y = m.Var()
+ m.options.IMODE=2
+ xm = tiresmdarg[tiresmdarg["Fecha"]==i]["MD"].to_numpy()
+ ym = tiresmdarg[tiresmdarg["Fecha"]==i]["TIR"].to_numpy()
+ m.cspline(m.x,m.y,xm,ym)
+ m.solve(disp=False)
+ yt.append(list([dia,m.x,m.y]))
+
+#Se guardan los resultados en un Dataframe y se exportan.
+datos=pd.DataFrame(yt)
+datos.to_csv(TIRes_path+"SETs.csv")
+#Para graficar ejemplos aleatorios de curvas diarias
+import random
+fig, axs = plt.subplots(5,2,sharex=True,sharey=True)
+axs.setx
+ies=np.random.randint(1,len(yt),size=10)
+i=ies[0]
+axs[0,0].plot(yt[0][1],pd.to_numeric(yt[i][2]),'r--',label=yt[i][0])
+xm = tiresmdarg[tiresmdarg["Fecha"]==yt[i][0]]["MD"].to_numpy()
+ym = tiresmdarg[tiresmd["Fecha"]==yt[i][0]]["TIR"].to_numpy()
+axs[0,0].plot(xm,ym,'bo',label='data')
+axs[0,0].legend()
+i=ies[1]
+axs[1,0].plot(yt[0][1],pd.to_numeric(yt[i][2]),'r--',label=yt[i][0])
+xm = tiresmd[tiresmd["Fecha"]==yt[i][0]]["MD"].to_numpy()
+ym = tiresmd[tiresmd["Fecha"]==yt[i][0]]["TIR"].to_numpy()
+axs[1,0].plot(xm,ym,'bo',label='data')
+axs[1,0].legend()
+i=ies[2]
+axs[2,0].plot(yt[0][1],pd.to_numeric(yt[i][2]),'r--',label=yt[i][0])
+xm = tiresmdarg[tiresmdarg["Fecha"]==yt[i][0]]["MD"].to_numpy()
+ym = tiresmdarg[tiresmdarg["Fecha"]==yt[i][0]]["TIR"].to_numpy()
+axs[2,0].plot(xm,ym,'bo',label='data')
+axs[2,0].legend()
+i=ies[3]
+axs[3,0].plot(yt[0][1],pd.to_numeric(yt[i][2]),'r--',label=yt[i][0])
+xm = tiresmdarg[tiresmdarg["Fecha"]==yt[i][0]]["MD"].to_numpy()
+ym = tiresmdarg[tiresmdarg["Fecha"]==yt[i][0]]["TIR"].to_numpy()
+axs[3,0].plot(xm,ym,'bo',label='data')
+axs[3,0].legend()
+i=ies[4]
+axs[4,0].plot(yt[0][1],pd.to_numeric(yt[i][2]),'r--',label=yt[i][0])
+xm = tiresmdarg[tiresmdarg["Fecha"]==yt[i][0]]["MD"].to_numpy()
+ym = tiresmdarg[tiresmdarg["Fecha"]==yt[i][0]]["TIR"].to_numpy()
+axs[4,0].plot(xm,ym,'bo',label='data')
+axs[4,0].legend()
+32
+i=ies[5]
+axs[0,1].plot(yt[0][1],pd.to_numeric(yt[i][2]),'r--',label=yt[i][0])
+xm = tiresmdarg[tiresmdarg["Fecha"]==yt[i][0]]["MD"].to_numpy()
+ym = tiresmdarg[tiresmdarg["Fecha"]==yt[i][0]]["TIR"].to_numpy()
+axs[0,1].plot(xm,ym,'bo',label='data')
+axs[0,1].legend()
+i=ies[6]
+axs[1,1].plot(yt[0][1],pd.to_numeric(yt[i][2]),'r--',label=yt[i][0])
+xm = tiresmdarg[tiresmdarg["Fecha"]==yt[i][0]]["MD"].to_numpy()
+ym = tiresmdarg[tiresmdarg["Fecha"]==yt[i][0]]["TIR"].to_numpy()
+axs[1,1].plot(xm,ym,'bo',label='data')
+axs[1,1].legend()
+i=ies[7]
+axs[2,1].plot(yt[0][1],pd.to_numeric(yt[i][2]),'r--',label=yt[i][0])
+xm = tiresmdarg[tiresmdarg["Fecha"]==yt[i][0]]["MD"].to_numpy()
+ym = tiresmdarg[tiresmdarg["Fecha"]==yt[i][0]]["TIR"].to_numpy()
+axs[2,1].plot(xm,ym,'bo',label='data')
+axs[2,1].legend()
+i=ies[8]
+axs[3,1].plot(yt[0][1],pd.to_numeric(yt[i][2]),'r--',label=yt[i][0])
+xm = tiresmdarg[tiresmdarg["Fecha"]==yt[i][0]]["MD"].to_numpy()
+ym = tiresmdarg[tiresmdarg["Fecha"]==yt[i][0]]["TIR"].to_numpy()
+axs[3,1].plot(xm,ym,'bo',label='data')
+axs[3,1].legend()
+i=ies[9]
+axs[4,1].plot(yt[0][1],pd.to_numeric(yt[i][2]),'r--',label=yt[i][0])
+xm = tiresmdarg[tiresmdarg["Fecha"]==yt[i][0]]["MD"].to_numpy()
+ym = tiresmdarg[tiresmdarg["Fecha"]==yt[i][0]]["TIR"].to_numpy()
+axs[4,1].plot(xm,ym,'bo',label='data')
+axs[4,1].legend()
+fig.set_figheight(15)
+fig.set_figwidth(15)
+plt.legend()
+plt.show()
+
+# Construcción de nuevos Dataframes y exportación
+final=yt
+cuadro=[]
+cuadro.clear()
+for i in range(len(final)):
+ cuadro.append([final[i][0]]+[final[i][2]])
+a=[]
+a.clear()
+for i in range(len(cuadro)):
+ b=[]
+ b.clear()
+ b.append(cuadro[i][0])
+ for j in range(len(cuadro[i][1])):
+ b.append(cuadro[i][1][j])
+ a.append(b)
+df = pd.DataFrame.from_records(a)
+df
+33
+titulos=list(yt[0][1])
+titulosbis=["Fecha"]+titulos
+df.columns=titulosbis
+pd.to_numeric(df.iloc[2,1:])
+
+"""EXPORTACION"""
+Compendio=df
+CompendioTIR=Compendio.copy()
+CompendioTIR.to_csv(TIRes_path+"TIRes.csv")
+3) Estimación de PCA
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+import pylab as plb
+from pylab import rcParams
+from matplotlib.ticker import (MultipleLocator, AutoMinorLocator)
+#Importación de base TIR
+path = "/RUTA/"
+tirs= pd.read_csv(path + "TIRes.csv")
+
+#Gráfico de evolución de las tasas correspondientes a 2, 5 y 10 años
+fig, ax = plt.subplots()
+ax.xaxis.set_major_locator(MultipleLocator(60))
+ax.plot(tirs["Fecha"],tirs["2.0"],label="2 años")
+ax.plot(tirs["Fecha"],tirs["5.0"],label="5 años")
+ax.plot(tirs["Fecha"],tirs["10.0"],label="10 años")
+ax.set_xlabel("MD",size=12)
+ax.set_ylabel("TIR",size=12)
+ax.legend()
+plt.xticks(rotation=90)
+plt.show()
+# Implementación del PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+x=tirs.iloc[:,2:] #Se remueven las columnas índice y fechas
+
+#Se estandariza el dataset, restando media y dividiendo por desvío estándar.
+x = StandardScaler().fit_transform(x)
+pcatir = PCA(n_components=3) #Elección del número de componentes de interés, según la varianza explicada incremental
+principalComponentsTIR = pcatir.fit_transform(x)
+#Se estima el modelo y se alojan en una variable los resultados
+#Se alojan los resultados, valores de los componentes para cada fecha de la ventana, en un dataframe.
+principalDftir = pd.DataFrame(data = principalComponentsTIR
+ , columns = ['PC1', 'PC2', 'PC3'])
+34
+
+#Se obtienen los resultados de interés
+print(pcatir.singular_values_)
+pcatir.explained_variance_
+PCs=pd.DataFrame(pcatir.components_)
+pcatir.explained_variance_ratio_)
+pcatir.explained_variance_ratio_[0]*100+pcatir.explained_variance_ratio_[1]*100+pcatir.explained_variance_ratio_[2]*100
+pcatir.explained_variance_ratio_[0]*100+pcatir.explained_variance_ratio_[1]*100
+
+#Se grafican los resultados
+rcParams['figure.figsize'] = 10, 5
+t = tirs.Fecha
+plt.plot(t,principalDftir["PC1"],"b--",label="PC1")
+plt.plot(t,principalDftir["PC2"],"r*",label="PC2")
+plt.plot(t,principalDftir["PC3"],"y*",label="PC3")
+plt.legend()
+plt.xticks(np.arange(0,len(vars),60),rotation="vertical")
+plt.show()
+fig, axs = plt.subplots(3,1,sharex=True)
+t = tirs.Fecha
+axs[0].plot(t,principalDftir["PC1"],"b--",label="PC1")
+axs[0].legend(loc=3)
+axs[1].plot(t,principalDftir["PC2"],"r*",label="PC2")
+axs[1].legend(loc=3)
+axs[2].plot(t,principalDftir["PC3"],"yo",label="PC3")
+axs[2].legend(loc=3)
+fig.set_figheight(15)
+fig.set_figwidth(15)
+plt.xticks(np.arange(0,len(tirs),60),rotation="vertical")
+plt.show()
